@@ -39,7 +39,8 @@ def integrate(y, x):
 
 
 def preprocess_data(bg_fn, exp_fn, background_choice='separate',
-                    background_H2=None, background_Ar=None, start_time=0.1):
+                    background_H2=None, background_Ar=None,
+                    start_time=0.1, cut_tail=True):
     """Preprocess excel data.
 
     Subtracte background from experimental data.
@@ -66,6 +67,11 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
         index of injection during experiment
     temp : np.ndarry, shape (1, n)
         temperature
+    start_time : float
+        start time of injection
+    cut_tail : bool
+        treat tail of experimental data as background
+        and cut it
     """
     # read background excel
     log.info("Read background data: %s", bg_fn)
@@ -87,8 +93,6 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
     index = df_exp1.columns[1:].astype(int)
     temp = df_exp1.iloc[0, 1:].astype(float)
 
-    # cut tail values that are background noise
-    cut_tail = False
     # get the mean of each backround
     log.info("Background choice: %s", background_choice)
     if background_choice == 'separate':
@@ -96,7 +100,6 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
         bg_means2 = df_bg2.iloc[1:, 1:].values.mean()
         bg_cutoff1 = df_bg1.iloc[1:, 1:].values.max()
         bg_cutoff2 = df_bg2.iloc[1:, 1:].values.max()
-        cut_tail = True
     elif background_choice == 'last_second':
         # search the starting row of the last second
         start = time.values[-1] - 1
@@ -105,7 +108,6 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
         bg_means2 = df_exp2.iloc[row+1:, 1:].values.mean(axis=0)
         bg_cutoff1 = df_exp1.iloc[row+1:, 1:].values.max(axis=0)
         bg_cutoff2 = df_exp2.iloc[row+1:, 1:].values.max(axis=0)
-        cut_tail = True
         df_exp1 = df_exp1.iloc[:row+1, :]
         df_exp2 = df_exp2.iloc[:row+1, :]
         time = time[:row]
@@ -114,6 +116,7 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
             raise ValueError("set background values when choosing user_input")
         bg_means1 = background_Ar
         bg_means2 = background_H2
+        log.warning("Cut_tail set to False as it does not support user input")
     else:
         log.warning("background choice not understood, "
                     "choose from (separate, last_second, user_input)")
@@ -135,6 +138,12 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
         cut2 = bg_cutoff2 - bg_means2
         true_exp1[true_exp1 <= cut1] = 0
         true_exp2[true_exp2 <= cut2] = 0
+    else:
+        log.info("Use the whole experimental data")
+        log.warning(
+            "!!!Be aware, it might lead to inaccurate calculation "
+            "as the tail of experimental data might be just background noise"
+        )
 
     return (true_exp1, true_exp2,
             time, index, temp.values)
@@ -144,7 +153,8 @@ def process(bg_fn, exp_fn, out_fn=None,
             background_choice='separate',
             background_H2=None,
             background_Ar=None,
-            start_time=0.1):
+            start_time=0.1,
+            cut_tail=True):
     """Process experimental data and calculate three integrals.
 
     Two steps apply for all injections:
@@ -163,7 +173,8 @@ def process(bg_fn, exp_fn, out_fn=None,
     log.info("Start processing")
     y_Ar, y_H2, time, index, temp = preprocess_data(
         bg_fn, exp_fn, background_choice,
-        background_H2, background_Ar, start_time
+        background_H2, background_Ar,
+        start_time, cut_tail
     )
     log.info("Calculate integrals")
     # integral of f(t)dt
@@ -196,7 +207,10 @@ def process(bg_fn, exp_fn, out_fn=None,
                         M1_Ar, M2_H2, M2_Ar, M0H2_to_M0Ar]).T
     df_result = pd.DataFrame(values, columns=columns)
     if out_fn is None:
-        out_fn = 'results.xlsx'
+        out_fn = '{}_{}.xlsx'.format(exp_fn.split('.')[0], background_choice)
+    if not out_fn.endswith('.xlsx'):
+        log.info("Add extension `.xlsx` to result file: %s", out_fn)
+        out_fn = out_fn + '.xlsx'
     log.info("Write result to %s", out_fn)
     df_result.to_excel(out_fn, index=False)
     log.info("Complete")
