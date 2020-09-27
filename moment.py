@@ -68,7 +68,7 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
         temperature
     """
     # read background excel
-    log.info("Read background data")
+    log.info("Read background data: %s", bg_fn)
     df_bg = pd.read_excel(bg_fn, sheet_name=None)
     # get sheets
     # first 2 columns are meta data, remove them
@@ -76,7 +76,7 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
     df_bg1 = df_bg['1'].iloc[:-1, 2:]
     df_bg2 = df_bg['2'].iloc[:-1, 2:]
     # read experimental data excel
-    log.info("Read experimental data")
+    log.info("Read experimental data: %s", exp_fn)
     df_exp = pd.read_excel(exp_fn, sheet_name=None)
     df_exp1 = df_exp['1'].iloc[:-1, 2:]
     df_exp2 = df_exp['2'].iloc[:-1, 2:]
@@ -87,16 +87,25 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
     index = df_exp1.columns[1:].astype(int)
     temp = df_exp1.iloc[0, 1:].astype(float)
 
+    # cut tail values that are background noise
+    cut_tail = False
     # get the mean of each backround
+    log.info("Background choice: %s", background_choice)
     if background_choice == 'separate':
         bg_means1 = df_bg1.iloc[1:, 1:].values.mean()
         bg_means2 = df_bg2.iloc[1:, 1:].values.mean()
+        bg_cutoff1 = df_bg1.iloc[1:, 1:].values.max()
+        bg_cutoff2 = df_bg2.iloc[1:, 1:].values.max()
+        cut_tail = True
     elif background_choice == 'last_second':
         # search the starting row of the last second
         start = time.values[-1] - 1
         row = np.where(time.values >= start)[0][0]
         bg_means1 = df_exp1.iloc[row+1:, 1:].values.mean(axis=0)
         bg_means2 = df_exp2.iloc[row+1:, 1:].values.mean(axis=0)
+        bg_cutoff1 = df_exp1.iloc[row+1:, 1:].values.max(axis=0)
+        bg_cutoff2 = df_exp2.iloc[row+1:, 1:].values.max(axis=0)
+        cut_tail = True
         df_exp1 = df_exp1.iloc[:row+1, :]
         df_exp2 = df_exp2.iloc[:row+1, :]
         time = time[:row]
@@ -110,13 +119,24 @@ def preprocess_data(bg_fn, exp_fn, background_choice='separate',
                     "choose from (separate, last_second, user_input)")
 
     # subtract the mean from experimental data for each column
+    log.info("Subtract background from experimental data")
     start_row = np.where(time.values >= start_time)[0][0]
     true_exp1 = df_exp1.iloc[start_row+1:, 1:] - bg_means1
+    true_exp1 = true_exp1.values
     true_exp2 = df_exp2.iloc[start_row+1:, 1:] - bg_means2
+    true_exp2 = true_exp2.values
     # shift time to the start time of injection
     time = time.values[start_row:]-start_time
 
-    return (true_exp1.values, true_exp2.values,
+    # cut tail
+    if cut_tail:
+        log.info("Cut tail")
+        cut1 = bg_cutoff1 - bg_means1
+        cut2 = bg_cutoff2 - bg_means2
+        true_exp1[true_exp1 <= cut1] = 0
+        true_exp2[true_exp2 <= cut2] = 0
+
+    return (true_exp1, true_exp2,
             time, index, temp.values)
 
 
@@ -140,8 +160,7 @@ def process(bg_fn, exp_fn, out_fn=None,
     out_fn : str, optional
         path to result file
     """
-    log.info("Start processing, background data: %s, experimental data: %s",
-             bg_fn, exp_fn)
+    log.info("Start processing")
     y_Ar, y_H2, time, index, temp = preprocess_data(
         bg_fn, exp_fn, background_choice,
         background_H2, background_Ar, start_time
@@ -188,4 +207,3 @@ if __name__ == '__main__':
     import sys
     args = sys.argv[1:]
     process(*args)
-
